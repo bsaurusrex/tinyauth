@@ -122,6 +122,51 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 		assert.Empty(t, got.UserinfoURL)
 	})
 
+	t.Run("rejects a document that omits a required endpoint", func(t *testing.T) {
+		// Valid JSON and a matching issuer, but no token_endpoint: this must error (and surface the
+		// fail-soft warning) rather than silently building a provider with an empty token endpoint.
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{
+				"issuer": "` + issuer + `",
+				"authorization_endpoint": "https://idp.example.com/authorize",
+				"userinfo_endpoint": "https://idp.example.com/userinfo"
+			}`
+		})
+
+		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+
+		got, err := resolveOIDCDiscovery(cfg, context.Background())
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "token_endpoint")
+		assert.Empty(t, got.AuthURL)
+		assert.Empty(t, got.TokenURL)
+		assert.Empty(t, got.UserinfoURL)
+	})
+
+	t.Run("uses an explicit endpoint to satisfy one the document omits", func(t *testing.T) {
+		// The document omits token_endpoint, but it is configured explicitly, so discovery still succeeds.
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{
+				"issuer": "` + issuer + `",
+				"authorization_endpoint": "https://idp.example.com/authorize",
+				"userinfo_endpoint": "https://idp.example.com/userinfo"
+			}`
+		})
+
+		cfg := model.OAuthServiceConfig{
+			Issuer:   server.URL,
+			TokenURL: "https://custom.example.com/token",
+		}
+
+		got, err := resolveOIDCDiscovery(cfg, context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, "https://idp.example.com/authorize", got.AuthURL)
+		assert.Equal(t, "https://custom.example.com/token", got.TokenURL)
+		assert.Equal(t, "https://idp.example.com/userinfo", got.UserinfoURL)
+	})
+
 	t.Run("skips discovery when all endpoints are already set", func(t *testing.T) {
 		// The issuer points at a server that always errors; discovery must not be attempted.
 		server := discoveryTestServer(t, http.StatusInternalServerError, func(issuer string) string {

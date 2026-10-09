@@ -85,17 +85,46 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 		return cfg, fmt.Errorf("OIDC discovery issuer mismatch: document reports %q, expected %q", doc.Issuer, cfg.Issuer)
 	}
 
-	if cfg.AuthURL == "" {
-		cfg.AuthURL = doc.AuthorizationEndpoint
+	// Determine the effective endpoints: an explicitly configured value always wins, otherwise the
+	// discovered one is used. The config is only mutated once every required endpoint is present, so a
+	// document that is valid JSON but omits an endpoint is rejected (and surfaces the fail-soft warning)
+	// instead of silently building a provider with an empty endpoint.
+	authURL := cfg.AuthURL
+	if authURL == "" {
+		authURL = doc.AuthorizationEndpoint
 	}
 
-	if cfg.TokenURL == "" {
-		cfg.TokenURL = doc.TokenEndpoint
+	tokenURL := cfg.TokenURL
+	if tokenURL == "" {
+		tokenURL = doc.TokenEndpoint
 	}
 
-	if cfg.UserinfoURL == "" {
-		cfg.UserinfoURL = doc.UserinfoEndpoint
+	userinfoURL := cfg.UserinfoURL
+	if userinfoURL == "" {
+		userinfoURL = doc.UserinfoEndpoint
 	}
+
+	var missing []string
+
+	if authURL == "" {
+		missing = append(missing, "authorization_endpoint")
+	}
+
+	if tokenURL == "" {
+		missing = append(missing, "token_endpoint")
+	}
+
+	if userinfoURL == "" {
+		missing = append(missing, "userinfo_endpoint")
+	}
+
+	if len(missing) > 0 {
+		return cfg, fmt.Errorf("OIDC discovery document from %q is missing required endpoint(s): %s", cfg.Issuer, strings.Join(missing, ", "))
+	}
+
+	cfg.AuthURL = authURL
+	cfg.TokenURL = tokenURL
+	cfg.UserinfoURL = userinfoURL
 
 	return cfg, nil
 }
