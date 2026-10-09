@@ -145,7 +145,7 @@ type AuthConfig struct {
 	Users              []string                  `description:"Comma-separated list of users (username:hashed_password)." yaml:"users,omitempty"`
 	SubdomainsEnabled  bool                      `description:"Enable subdomains support." yaml:"subdomainsEnabled,omitempty"`
 	UserAttributes     map[string]UserAttributes `description:"Map of per-user OIDC attributes (username -> attributes)." yaml:"userAttributes,omitempty"`
-	UsersFile          string                    `description:"Path to the users file." yaml:"usersFile,omitempty"`
+	UsersFile          string                    `description:"Path to the users file, one username:password_hash[:totp_secret] user per line (comma-separated users on one line are also accepted)." yaml:"usersFile,omitempty"`
 	SecureCookie       bool                      `description:"Enable secure cookies." yaml:"secureCookie,omitempty"`
 	SessionExpiry      int                       `description:"Session expiry time in seconds." yaml:"sessionExpiry,omitempty"`
 	SessionMaxLifetime int                       `description:"Maximum session lifetime in seconds." yaml:"sessionMaxLifetime,omitempty"`

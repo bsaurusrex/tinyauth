@@ -2,6 +2,7 @@ package utils_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,65 @@ func TestGetUsers(t *testing.T) {
 			assert.Equal(t, "", u.Attributes.Name)
 		}
 	}
+
+	// Test comma-separated users on a single file line (v4 format)
+	err = os.WriteFile(tmpDir+"/tinyauth_users_comma.txt", []byte("user6:"+hash+":JBSWY3DPEHPK3PXP,user7:"+hash+",\r\nuser8:"+hash+"\r\n"), 0600)
+	require.NoError(t, err)
+
+	users, err = utils.GetUsers([]string{}, tmpDir+"/tinyauth_users_comma.txt", noAttrs)
+
+	assert.NoError(t, err)
+	assert.Len(t, *users, 3)
+	assert.Equal(t, "user6", (*users)[0].Username)
+	assert.Equal(t, "JBSWY3DPEHPK3PXP", (*users)[0].TOTPSecret)
+	assert.Equal(t, "user7", (*users)[1].Username)
+	assert.Equal(t, hash, (*users)[1].Password)
+	assert.Equal(t, "", (*users)[1].TOTPSecret)
+	assert.Equal(t, "user8", (*users)[2].Username)
+	assert.Equal(t, hash, (*users)[2].Password)
+
+	// Test usernames containing a comma are not split
+	users, err = utils.GetUsers([]string{"Doe, John:" + hash}, "", noAttrs)
+
+	assert.NoError(t, err)
+	assert.Len(t, *users, 1)
+	assert.Equal(t, "Doe, John", (*users)[0].Username)
+
+	// Test a comma-separated list with an invalid user is rejected instead of misparsed
+	_, err = utils.GetUsers([]string{"user6:" + hash + ":JBSWY3DPEHPK3PXP,user7"}, "", noAttrs)
+
+	assert.ErrorContains(t, err, "user entry 1: invalid user format")
+
+	// Test a malformed line is never split into different users (would drop the TOTP of user6)
+	_, err = utils.GetUsers([]string{"user6:" + hash + ",x:JBSWY3DPEHPK3PXP"}, "", noAttrs)
+
+	assert.ErrorContains(t, err, "user entry 1: invalid user format")
+
+	// Test a single user with a stray comma is not renamed
+	users, err = utils.GetUsers([]string{",user9:" + hash}, "", noAttrs)
+
+	assert.NoError(t, err)
+	assert.Len(t, *users, 1)
+	assert.Equal(t, ",user9", (*users)[0].Username)
+
+	// Test a leading comma in a multi-user entry does not rename the first user by dropping the blank part
+	_, err = utils.GetUsers([]string{",user9:" + hash + ",user10:" + hash}, "", noAttrs)
+
+	assert.ErrorContains(t, err, "user entry 1: invalid user format")
+
+	// Test a well-shaped but malformed bcrypt body is not accepted as a hash that would split the entry
+	badHash := "$2a$10$" + strings.Repeat("!", 53)
+
+	assert.Len(t, badHash, 60)
+
+	_, err = utils.GetUsers([]string{"user11:" + badHash + ",user12:" + hash}, "", noAttrs)
+
+	assert.ErrorContains(t, err, "user entry 1: invalid user format")
+
+	// Test invalid entry reports its position
+	_, err = utils.GetUsers([]string{"user8:" + hash, "user9"}, "", noAttrs)
+
+	assert.ErrorContains(t, err, "user entry 2: invalid user format")
 
 	// Test empty
 	users, err = utils.GetUsers([]string{}, "", noAttrs)

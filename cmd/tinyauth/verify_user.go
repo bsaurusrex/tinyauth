@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
+	"github.com/tinyauthapp/tinyauth/internal/model"
 	"github.com/tinyauthapp/tinyauth/internal/utils"
 
 	"charm.land/huh/v2"
@@ -86,15 +88,20 @@ func verifyUserCmd() *cli.Command {
 			return fmt.Errorf("user, username, and password are required")
 		}
 
-		user, err := utils.ParseUser(tCfg.User)
+		// parse like the server does, a users file line may hold several comma-separated users
+		users, err := utils.ParseUserEntry(tCfg.User)
 
 		if err != nil {
 			return fmt.Errorf("failed to parse user: %w", err)
 		}
 
-		if user.Username != tCfg.Username {
+		idx := slices.IndexFunc(users, func(u model.LocalUser) bool { return u.Username == tCfg.Username })
+
+		if idx == -1 {
 			return fmt.Errorf("username is incorrect")
 		}
+
+		user := users[idx]
 
 		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(tCfg.Password))
 
