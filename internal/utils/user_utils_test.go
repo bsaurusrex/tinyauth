@@ -129,6 +129,22 @@ func TestGetUsers(t *testing.T) {
 
 	assert.ErrorContains(t, err, "user entry 1: invalid user format")
 
+	// Test a single user with a tolerated trailing comma (v4 wrote one) still parses
+	users, err = utils.GetUsers([]string{"user13:" + hash + ","}, "", noAttrs)
+
+	assert.NoError(t, err)
+	assert.Len(t, *users, 1)
+	assert.Equal(t, "user13", (*users)[0].Username)
+	assert.Equal(t, hash, (*users)[0].Password)
+
+	// Test a single user with TOTP and a trailing comma keeps the TOTP intact
+	users, err = utils.GetUsers([]string{"user14:" + hash + ":JBSWY3DPEHPK3PXP,"}, "", noAttrs)
+
+	assert.NoError(t, err)
+	assert.Len(t, *users, 1)
+	assert.Equal(t, "user14", (*users)[0].Username)
+	assert.Equal(t, "JBSWY3DPEHPK3PXP", (*users)[0].TOTPSecret)
+
 	// Test a well-shaped but malformed bcrypt body is not accepted as a hash that would split the entry
 	badHash := "$2a$10$" + strings.Repeat("!", 53)
 

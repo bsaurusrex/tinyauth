@@ -60,7 +60,10 @@ func ParseUserEntry(entry string) ([]model.LocalUser, error) {
 			}
 			users = append(users, *user)
 		}
-		if len(users) > 1 {
+		// A single user with only a tolerated trailing comma is still a clean list; return it
+		// so a v4 file with one user per line (each ending in a comma) keeps working.
+		trailingOnly := len(users) == 1 && len(parts) == 2 && strings.TrimSpace(parts[1]) == ""
+		if len(users) > 1 || trailingOnly {
 			return users, nil
 		}
 	}
