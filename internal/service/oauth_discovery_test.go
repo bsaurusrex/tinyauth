@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,6 +106,21 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 
 	t.Run("fails soft on an invalid document", func(t *testing.T) {
 		server := discoveryTestServer(t, http.StatusOK, "not json")
+
+		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+
+		got, err := resolveOIDCDiscovery(cfg, context.Background())
+
+		require.Error(t, err)
+		assert.Empty(t, got.AuthURL)
+	})
+
+	t.Run("fails soft on an oversized body instead of exhausting memory", func(t *testing.T) {
+		// Pad the document past the read cap so the body cannot be fully consumed; the truncated
+		// read must surface as a decode error rather than an unbounded allocation.
+		padding := strings.Repeat(" ", (2<<20)+1)
+		body := `{"authorization_endpoint": "https://idp.example.com/authorize"` + padding + `}`
+		server := discoveryTestServer(t, http.StatusOK, body)
 
 		cfg := model.OAuthServiceConfig{Issuer: server.URL}
 

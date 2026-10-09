@@ -5,12 +5,17 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/tinyauthapp/tinyauth/internal/model"
 )
+
+// maxDiscoveryBodyBytes caps how much of a discovery document is read, so a slow or hostile issuer
+// cannot exhaust memory with an unbounded response body.
+const maxDiscoveryBodyBytes = 1 << 20 // 1 MiB
 
 // oidcDiscoveryDocument holds the endpoints Tinyauth can fill from an OIDC provider's well-known
 // configuration (https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata).
@@ -67,7 +72,7 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 
 	var doc oidcDiscoveryDocument
 
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxDiscoveryBodyBytes)).Decode(&doc); err != nil {
 		return cfg, fmt.Errorf("failed to decode OIDC discovery document: %w", err)
 	}
 
