@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrEmptyURL = fmt.Errorf("invalid url")
+	ErrEmptyURL = fmt.Errorf("app url is not set")
 )
 
 func SafeParseAppURL(str string) (string, error) {
@@ -28,7 +28,7 @@ func SafeParseAppURL(str string) (string, error) {
 	if u.Host == "" ||
 		(u.Scheme != "http" &&
 			u.Scheme != "https") {
-		return "", fmt.Errorf("invalid url, must be in format https(s)://host")
+		return "", fmt.Errorf("invalid url, must be in format http(s)://host")
 	}
 
 	hostname := strings.ToLower(u.Hostname())

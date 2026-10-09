@@ -20,10 +20,12 @@ func main() {
 	env := model.DetectRuntimeEnv()
 	tConfig := model.NewDefaultConfiguration(env)
 
+	envLoader := &loaders.EnvLoader{}
+
 	loaders := []cli.ResourceLoader{
 		&loaders.FileLoader{},
 		&loaders.FlagLoader{},
-		&loaders.EnvLoader{},
+		envLoader,
 	}
 
 	cmdTinyauth := &cli.Command{
@@ -37,7 +39,7 @@ func main() {
 				colors := getColors()
 				fmt.Println(colors.yellow.Render("⚠") + " Experimental features are enabled, use with caution. Experimental features may change with each release.")
 			}
-			return runCmd(*tConfig)
+			return runCmd(*tConfig, envLoader.Ignored)
 		},
 	}
 
@@ -144,8 +146,8 @@ func main() {
 	}
 }
 
-func runCmd(cfg model.Config) error {
-	app := bootstrap.NewBootstrapApp(cfg)
+func runCmd(cfg model.Config, ignoredEnvVars []string) error {
+	app := bootstrap.NewBootstrapApp(cfg).WithIgnoredEnvVars(ignoredEnvVars)
 
 	err := app.Setup()
 

@@ -58,12 +58,20 @@ type BootstrapApp struct {
 	db       *sql.DB
 	ding     *ding.Ding
 	dig      *dig.Container
+
+	ignoredEnvVars []string
 }
 
 func NewBootstrapApp(config model.Config) *BootstrapApp {
 	return &BootstrapApp{
 		config: config,
 	}
+}
+
+// WithIgnoredEnvVars sets the unknown environment variables found while loading the configuration, they are logged on startup
+func (app *BootstrapApp) WithIgnoredEnvVars(names []string) *BootstrapApp {
+	app.ignoredEnvVars = names
+	return app
 }
 
 func (app *BootstrapApp) Setup() error {
@@ -87,8 +95,22 @@ func (app *BootstrapApp) Setup() error {
 
 	app.log.App.Info().Msgf("Starting Tinyauth version: %s", model.Version)
 
+	if len(app.ignoredEnvVars) > 0 {
+		app.log.App.Warn().Strs("variables", app.ignoredEnvVars).Msg("Ignoring unknown environment variables, see https://tinyauth.app/docs/reference/configuration")
+	}
+
 	// get app url
 	appURL, err := utils.SafeParseAppURL(app.config.AppURL)
+
+	if errors.Is(err, utils.ErrEmptyURL) {
+		// v4 used APP_URL, a common leftover when migrating to v5
+		for _, legacy := range []string{"APP_URL", "TINYAUTH_APP_URL"} {
+			if os.Getenv(legacy) != "" {
+				return fmt.Errorf("%w, found %s which is not used since v5, rename it to TINYAUTH_APPURL", err, legacy)
+			}
+		}
+		return fmt.Errorf("%w, set it with TINYAUTH_APPURL, --appurl or appUrl in the config file (environment variables are ignored when a config file or CLI flags are used)", err)
+	}
 
 	if err != nil {
 		return fmt.Errorf("failed to parse app url: %w", err)
