@@ -160,6 +160,10 @@ func (controller *ContextController) userContextHandler(c *gin.Context) {
 	c.JSON(200, userContext)
 }
 
+// versionHandler returns the running Tinyauth version, but only to an authenticated user. An
+// unauthenticated request (no context, or a present-but-unauthenticated one such as a pending TOTP
+// or a Tailscale probe) receives the standard 401 body with no version, so the version is never
+// disclosed publicly and cannot be used to fingerprint the deployment for known vulnerabilities.
 func (controller *ContextController) versionHandler(c *gin.Context) {
 	context, err := new(model.UserContext).NewFromGin(c)
 
