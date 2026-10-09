@@ -111,10 +111,15 @@ func healthcheckTarget(addr string, port string, socketPath string) (string, str
 	}
 
 	host := utils.TrimHostBrackets(addr)
-	// Go listens dual-stack on [::], so IPv4 loopback also works when IPv6 is disabled
 	switch host {
-	case "", "0.0.0.0", "::":
+	case "", "0.0.0.0":
+		// IPv4 wildcard (and the dual-stack :port listener): IPv4 loopback reaches it.
 		host = "127.0.0.1"
+	case "::":
+		// IPv6 wildcard: probe IPv6 loopback. It reaches a [::] listener whether it is
+		// dual-stack or IPv6-only, whereas 127.0.0.1 fails on an IPv6-only listener
+		// (a platform without IPv4-mapped IPv6, e.g. bindv6only).
+		host = "::1"
 	}
 
 	if port == "" {
