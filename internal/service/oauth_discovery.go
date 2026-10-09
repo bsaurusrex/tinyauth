@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,7 +41,20 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 		return cfg, nil
 	}
 
-	url := strings.TrimRight(cfg.Issuer, "/") + "/.well-known/openid-configuration"
+	// OIDC discovery requires secure transport (OpenID Connect Discovery 1.0), otherwise an intermediary
+	// could swap the discovered endpoints (the token endpoint receives the client secret). A non-HTTPS
+	// issuer is only allowed when the operator explicitly sets this provider's insecure flag.
+	issuerURL, err := url.Parse(cfg.Issuer)
+
+	if err != nil {
+		return cfg, fmt.Errorf("invalid OIDC issuer URL %q: %w", cfg.Issuer, err)
+	}
+
+	if issuerURL.Scheme != "https" && !cfg.Insecure {
+		return cfg, fmt.Errorf("refusing to fetch OIDC discovery from non-HTTPS issuer %q, set this provider's insecure option to allow it", cfg.Issuer)
+	}
+
+	discoveryURL := strings.TrimRight(cfg.Issuer, "/") + "/.well-known/openid-configuration"
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -51,9 +65,20 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 				MinVersion:         tls.VersionTLS12,
 			},
 		},
+		// Do not let a redirect downgrade the transport to plaintext (or any non-HTTPS scheme) unless
+		// insecure is set; that would reopen the interception window the HTTPS requirement closes.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if req.URL.Scheme != "https" && !cfg.Insecure {
+				return fmt.Errorf("refusing to follow OIDC discovery redirect to non-HTTPS URL %q", req.URL.Redacted())
+			}
+			return nil
+		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 
 	if err != nil {
 		return cfg, fmt.Errorf("failed to build OIDC discovery request: %w", err)

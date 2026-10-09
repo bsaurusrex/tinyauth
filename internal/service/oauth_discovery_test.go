@@ -13,7 +13,8 @@ import (
 )
 
 // discoveryTestServer serves a discovery document at the well-known path. docFn receives the server's
-// own URL so a document can advertise a matching (or deliberately mismatched) issuer.
+// own URL so a document can advertise a matching (or deliberately mismatched) issuer. The server speaks
+// plain HTTP, so tests that expect discovery to proceed set the provider's Insecure flag.
 func discoveryTestServer(t *testing.T, status int, docFn func(issuer string) string) *httptest.Server {
 	t.Helper()
 	var server *httptest.Server
@@ -28,6 +29,15 @@ func discoveryTestServer(t *testing.T, status int, docFn func(issuer string) str
 	return server
 }
 
+func validDoc(issuer string) string {
+	return `{
+		"issuer": "` + issuer + `",
+		"authorization_endpoint": "https://idp.example.com/authorize",
+		"token_endpoint": "https://idp.example.com/token",
+		"userinfo_endpoint": "https://idp.example.com/userinfo"
+	}`
+}
+
 func TestResolveOIDCDiscovery(t *testing.T) {
 	t.Run("no issuer is returned unchanged", func(t *testing.T) {
 		cfg := model.OAuthServiceConfig{ClientID: "abc"}
@@ -39,16 +49,9 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 	})
 
 	t.Run("fills missing endpoints from the discovery document", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
-			return `{
-				"issuer": "` + issuer + `",
-				"authorization_endpoint": "https://idp.example.com/authorize",
-				"token_endpoint": "https://idp.example.com/token",
-				"userinfo_endpoint": "https://idp.example.com/userinfo"
-			}`
-		})
+		server := discoveryTestServer(t, http.StatusOK, validDoc)
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL, Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
@@ -59,16 +62,9 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 	})
 
 	t.Run("accepts an issuer that differs only by a trailing slash", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
-			return `{
-				"issuer": "` + issuer + `",
-				"authorization_endpoint": "https://idp.example.com/authorize",
-				"token_endpoint": "https://idp.example.com/token",
-				"userinfo_endpoint": "https://idp.example.com/userinfo"
-			}`
-		})
+		server := discoveryTestServer(t, http.StatusOK, validDoc)
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL + "/"}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL + "/", Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
@@ -77,17 +73,11 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 	})
 
 	t.Run("does not overwrite explicitly configured endpoints", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
-			return `{
-				"issuer": "` + issuer + `",
-				"authorization_endpoint": "https://idp.example.com/authorize",
-				"token_endpoint": "https://idp.example.com/token",
-				"userinfo_endpoint": "https://idp.example.com/userinfo"
-			}`
-		})
+		server := discoveryTestServer(t, http.StatusOK, validDoc)
 
 		cfg := model.OAuthServiceConfig{
 			Issuer:   server.URL,
+			Insecure: true,
 			AuthURL:  "https://custom.example.com/auth",
 			TokenURL: "https://custom.example.com/token",
 			// UserinfoURL is left empty, so only it should be filled
@@ -101,6 +91,21 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 		assert.Equal(t, "https://idp.example.com/userinfo", got.UserinfoURL)
 	})
 
+	t.Run("rejects a non-HTTPS issuer unless insecure is set", func(t *testing.T) {
+		// The server would answer, but discovery must refuse the cleartext issuer before fetching.
+		server := discoveryTestServer(t, http.StatusOK, validDoc)
+
+		cfg := model.OAuthServiceConfig{Issuer: server.URL} // http://, Insecure defaults to false
+
+		got, err := resolveOIDCDiscovery(cfg, context.Background())
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "non-HTTPS")
+		assert.Empty(t, got.AuthURL)
+		assert.Empty(t, got.TokenURL)
+		assert.Empty(t, got.UserinfoURL)
+	})
+
 	t.Run("rejects a document whose issuer does not match", func(t *testing.T) {
 		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
 			return `{
@@ -111,7 +116,7 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 			}`
 		})
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL, Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
@@ -133,7 +138,7 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 			}`
 		})
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL, Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
@@ -156,6 +161,7 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 
 		cfg := model.OAuthServiceConfig{
 			Issuer:   server.URL,
+			Insecure: true,
 			TokenURL: "https://custom.example.com/token",
 		}
 
@@ -191,7 +197,7 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 			return "not found"
 		})
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL, Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
@@ -206,7 +212,7 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 			return "not json"
 		})
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL, Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
@@ -222,7 +228,7 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 			return `{"issuer": "` + issuer + `", "authorization_endpoint": "https://idp.example.com/authorize"` + padding + `}`
 		})
 
-		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+		cfg := model.OAuthServiceConfig{Issuer: server.URL, Insecure: true}
 
 		got, err := resolveOIDCDiscovery(cfg, context.Background())
 
