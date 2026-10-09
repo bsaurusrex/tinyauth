@@ -102,6 +102,14 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 		return cfg, fmt.Errorf("failed to decode OIDC discovery document: %w", err)
 	}
 
+	return applyDiscoveryDocument(cfg, doc)
+}
+
+// applyDiscoveryDocument validates a fetched discovery document against the configured provider and
+// returns the config with any missing endpoint filled in. It enforces the issuer match and the HTTPS
+// requirement on discovered endpoints; on any failure it returns the original config unchanged so the
+// caller can fail soft.
+func applyDiscoveryDocument(cfg model.OAuthServiceConfig, doc oidcDiscoveryDocument) (model.OAuthServiceConfig, error) {
 	// The issuer in the document MUST match the configured issuer (OIDC Discovery 1.0 section 4.3,
 	// RFC 8414 section 3.3). Rejecting a mismatch prevents a substitution/mix-up attack from pointing
 	// the endpoints (the token endpoint receives the client secret) at an unexpected provider. A
@@ -111,21 +119,48 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 	}
 
 	// Determine the effective endpoints: an explicitly configured value always wins, otherwise the
-	// discovered one is used. The config is only mutated once every required endpoint is present, so a
-	// document that is valid JSON but omits an endpoint is rejected (and surfaces the fail-soft warning)
-	// instead of silently building a provider with an empty endpoint.
+	// discovered one is used. A discovered endpoint must be HTTPS unless insecure is set, otherwise a
+	// (possibly tampered) document could send the user to a cleartext authorization page or make the
+	// client POST its secret to a cleartext token endpoint. Explicitly configured values are the
+	// operator's own choice and are left as-is, matching the non-discovery config path. The config is
+	// only mutated once every required endpoint is present, so a document that is valid JSON but omits
+	// an endpoint is rejected (and surfaces the fail-soft warning) instead of silently building a
+	// provider with an empty endpoint.
+	secure := func(name, raw string) error {
+		if cfg.Insecure || raw == "" {
+			return nil
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q in OIDC discovery document: %w", name, raw, err)
+		}
+		if parsed.Scheme != "https" {
+			return fmt.Errorf("OIDC discovery %s %q is not HTTPS, set this provider's insecure option to allow it", name, raw)
+		}
+		return nil
+	}
+
 	authURL := cfg.AuthURL
 	if authURL == "" {
+		if err := secure("authorization_endpoint", doc.AuthorizationEndpoint); err != nil {
+			return cfg, err
+		}
 		authURL = doc.AuthorizationEndpoint
 	}
 
 	tokenURL := cfg.TokenURL
 	if tokenURL == "" {
+		if err := secure("token_endpoint", doc.TokenEndpoint); err != nil {
+			return cfg, err
+		}
 		tokenURL = doc.TokenEndpoint
 	}
 
 	userinfoURL := cfg.UserinfoURL
 	if userinfoURL == "" {
+		if err := secure("userinfo_endpoint", doc.UserinfoEndpoint); err != nil {
+			return cfg, err
+		}
 		userinfoURL = doc.UserinfoEndpoint
 	}
 

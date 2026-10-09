@@ -220,6 +220,52 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 		assert.Empty(t, got.AuthURL)
 	})
 
+	t.Run("rejects a cleartext discovered authorization endpoint when not insecure", func(t *testing.T) {
+		doc := oidcDiscoveryDocument{
+			Issuer:                "https://idp.example.com",
+			AuthorizationEndpoint: "http://idp.example.com/authorize", // cleartext
+			TokenEndpoint:         "https://idp.example.com/token",
+			UserinfoEndpoint:      "https://idp.example.com/userinfo",
+		}
+
+		got, err := applyDiscoveryDocument(model.OAuthServiceConfig{Issuer: "https://idp.example.com"}, doc)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "authorization_endpoint")
+		assert.Contains(t, err.Error(), "not HTTPS")
+		assert.Empty(t, got.AuthURL)
+	})
+
+	t.Run("rejects a cleartext discovered token endpoint when not insecure", func(t *testing.T) {
+		doc := oidcDiscoveryDocument{
+			Issuer:                "https://idp.example.com",
+			AuthorizationEndpoint: "https://idp.example.com/authorize",
+			TokenEndpoint:         "http://idp.example.com/token", // cleartext, would leak the client secret
+			UserinfoEndpoint:      "https://idp.example.com/userinfo",
+		}
+
+		got, err := applyDiscoveryDocument(model.OAuthServiceConfig{Issuer: "https://idp.example.com"}, doc)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "token_endpoint")
+		assert.Empty(t, got.TokenURL)
+	})
+
+	t.Run("allows a cleartext discovered endpoint when insecure is set", func(t *testing.T) {
+		doc := oidcDiscoveryDocument{
+			Issuer:                "http://idp.example.com",
+			AuthorizationEndpoint: "http://idp.example.com/authorize",
+			TokenEndpoint:         "http://idp.example.com/token",
+			UserinfoEndpoint:      "http://idp.example.com/userinfo",
+		}
+
+		got, err := applyDiscoveryDocument(model.OAuthServiceConfig{Issuer: "http://idp.example.com", Insecure: true}, doc)
+
+		require.NoError(t, err)
+		assert.Equal(t, "http://idp.example.com/authorize", got.AuthURL)
+		assert.Equal(t, "http://idp.example.com/token", got.TokenURL)
+	})
+
 	t.Run("fails soft on an oversized body instead of exhausting memory", func(t *testing.T) {
 		// Pad the document past the read cap so the body cannot be fully consumed; the truncated
 		// read must surface as a decode error rather than an unbounded allocation.
