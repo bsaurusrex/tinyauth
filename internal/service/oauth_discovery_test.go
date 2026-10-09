@@ -12,15 +12,18 @@ import (
 	"github.com/tinyauthapp/tinyauth/internal/model"
 )
 
-func discoveryTestServer(t *testing.T, status int, body string) *httptest.Server {
+// discoveryTestServer serves a discovery document at the well-known path. docFn receives the server's
+// own URL so a document can advertise a matching (or deliberately mismatched) issuer.
+func discoveryTestServer(t *testing.T, status int, docFn func(issuer string) string) *httptest.Server {
 	t.Helper()
+	var server *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write([]byte(docFn(server.URL)))
 	})
-	server := httptest.NewServer(mux)
+	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server
 }
@@ -36,11 +39,14 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 	})
 
 	t.Run("fills missing endpoints from the discovery document", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusOK, `{
-			"authorization_endpoint": "https://idp.example.com/authorize",
-			"token_endpoint": "https://idp.example.com/token",
-			"userinfo_endpoint": "https://idp.example.com/userinfo"
-		}`)
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{
+				"issuer": "` + issuer + `",
+				"authorization_endpoint": "https://idp.example.com/authorize",
+				"token_endpoint": "https://idp.example.com/token",
+				"userinfo_endpoint": "https://idp.example.com/userinfo"
+			}`
+		})
 
 		cfg := model.OAuthServiceConfig{Issuer: server.URL}
 
@@ -52,12 +58,33 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 		assert.Equal(t, "https://idp.example.com/userinfo", got.UserinfoURL)
 	})
 
+	t.Run("accepts an issuer that differs only by a trailing slash", func(t *testing.T) {
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{
+				"issuer": "` + issuer + `",
+				"authorization_endpoint": "https://idp.example.com/authorize",
+				"token_endpoint": "https://idp.example.com/token",
+				"userinfo_endpoint": "https://idp.example.com/userinfo"
+			}`
+		})
+
+		cfg := model.OAuthServiceConfig{Issuer: server.URL + "/"}
+
+		got, err := resolveOIDCDiscovery(cfg, context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, "https://idp.example.com/authorize", got.AuthURL)
+	})
+
 	t.Run("does not overwrite explicitly configured endpoints", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusOK, `{
-			"authorization_endpoint": "https://idp.example.com/authorize",
-			"token_endpoint": "https://idp.example.com/token",
-			"userinfo_endpoint": "https://idp.example.com/userinfo"
-		}`)
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{
+				"issuer": "` + issuer + `",
+				"authorization_endpoint": "https://idp.example.com/authorize",
+				"token_endpoint": "https://idp.example.com/token",
+				"userinfo_endpoint": "https://idp.example.com/userinfo"
+			}`
+		})
 
 		cfg := model.OAuthServiceConfig{
 			Issuer:   server.URL,
@@ -74,9 +101,32 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 		assert.Equal(t, "https://idp.example.com/userinfo", got.UserinfoURL)
 	})
 
+	t.Run("rejects a document whose issuer does not match", func(t *testing.T) {
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{
+				"issuer": "https://evil.example.com",
+				"authorization_endpoint": "https://evil.example.com/authorize",
+				"token_endpoint": "https://evil.example.com/token",
+				"userinfo_endpoint": "https://evil.example.com/userinfo"
+			}`
+		})
+
+		cfg := model.OAuthServiceConfig{Issuer: server.URL}
+
+		got, err := resolveOIDCDiscovery(cfg, context.Background())
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "issuer mismatch")
+		assert.Empty(t, got.AuthURL)
+		assert.Empty(t, got.TokenURL)
+		assert.Empty(t, got.UserinfoURL)
+	})
+
 	t.Run("skips discovery when all endpoints are already set", func(t *testing.T) {
 		// The issuer points at a server that always errors; discovery must not be attempted.
-		server := discoveryTestServer(t, http.StatusInternalServerError, "boom")
+		server := discoveryTestServer(t, http.StatusInternalServerError, func(issuer string) string {
+			return "boom"
+		})
 
 		cfg := model.OAuthServiceConfig{
 			Issuer:      server.URL,
@@ -92,7 +142,9 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 	})
 
 	t.Run("fails soft on a non-200 response", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusNotFound, "not found")
+		server := discoveryTestServer(t, http.StatusNotFound, func(issuer string) string {
+			return "not found"
+		})
 
 		cfg := model.OAuthServiceConfig{Issuer: server.URL}
 
@@ -105,7 +157,9 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 	})
 
 	t.Run("fails soft on an invalid document", func(t *testing.T) {
-		server := discoveryTestServer(t, http.StatusOK, "not json")
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return "not json"
+		})
 
 		cfg := model.OAuthServiceConfig{Issuer: server.URL}
 
@@ -119,8 +173,9 @@ func TestResolveOIDCDiscovery(t *testing.T) {
 		// Pad the document past the read cap so the body cannot be fully consumed; the truncated
 		// read must surface as a decode error rather than an unbounded allocation.
 		padding := strings.Repeat(" ", (2<<20)+1)
-		body := `{"authorization_endpoint": "https://idp.example.com/authorize"` + padding + `}`
-		server := discoveryTestServer(t, http.StatusOK, body)
+		server := discoveryTestServer(t, http.StatusOK, func(issuer string) string {
+			return `{"issuer": "` + issuer + `", "authorization_endpoint": "https://idp.example.com/authorize"` + padding + `}`
+		})
 
 		cfg := model.OAuthServiceConfig{Issuer: server.URL}
 

@@ -20,6 +20,7 @@ const maxDiscoveryBodyBytes = 1 << 20 // 1 MiB
 // oidcDiscoveryDocument holds the endpoints Tinyauth can fill from an OIDC provider's well-known
 // configuration (https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata).
 type oidcDiscoveryDocument struct {
+	Issuer                string `json:"issuer"`
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	UserinfoEndpoint      string `json:"userinfo_endpoint"`
@@ -74,6 +75,14 @@ func resolveOIDCDiscovery(cfg model.OAuthServiceConfig, ctx context.Context) (mo
 
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxDiscoveryBodyBytes)).Decode(&doc); err != nil {
 		return cfg, fmt.Errorf("failed to decode OIDC discovery document: %w", err)
+	}
+
+	// The issuer in the document MUST match the configured issuer (OIDC Discovery 1.0 section 4.3,
+	// RFC 8414 section 3.3). Rejecting a mismatch prevents a substitution/mix-up attack from pointing
+	// the endpoints (the token endpoint receives the client secret) at an unexpected provider. A
+	// trailing slash is not significant, so it is ignored.
+	if strings.TrimRight(doc.Issuer, "/") != strings.TrimRight(cfg.Issuer, "/") {
+		return cfg, fmt.Errorf("OIDC discovery issuer mismatch: document reports %q, expected %q", doc.Issuer, cfg.Issuer)
 	}
 
 	if cfg.AuthURL == "" {
